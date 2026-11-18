@@ -11,16 +11,27 @@ platforms.json，唯讀），產生本站根目錄的靜態網站：
 GitHub Pages 設定為 main 分支根目錄（/），所以輸出固定在 repo 根目錄，
 不使用 docs/ 資料夾。商品圖在 images/<slug>.jpg（自行託管，不外連）。
 
-用法： python3 build.py
+用法： python3 build.py                  （預設：讀本機 handoff CSV）
+      python3 build.py --source sheet   （讀 Google Sheet，見下）
 每日流程：改 handoff 的 prices.csv → python3 build.py → 上傳 index.html、
 data.json（以及有變動的 assets/、images/）到 repo 根目錄。
+
+Google Sheet 模式（--source sheet）：資料家在 Google Sheet
+「追蹤價格（其他）資料」（ID 寫在 site.config.json 的 sheet_id），
+每商品一個分頁（標題＝slug）＋ platforms 分頁。build 以匿名 gviz CSV
+匯出抓取（試算表須設為「知道連結者可檢視」），驗證通過才產生網站；
+驗證或抓取失敗會以非零碼結束且不覆寫任何輸出。GitHub Actions 用此模式。
 """
 import csv
 import datetime as dt
+import io
 import json
 import re
 import shutil
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -64,36 +75,155 @@ def num(v):
         return None
 
 
-def read_rows(slug, src_dir):
-    """讀 prices.csv 並正規化欄位。兩種版式：
+EXPECTED_HEADER = ["group", "date", "platform", "seller", "variant", "url",
+                   "price", "shipping", "threshold", "promo", "cashback_pct",
+                   "cashback_eur", "net_total", "verified", "note"]
+OLD_KEYS = ["platform", "seller", "date", "variant", "price",
+            "shipping", "threshold", "promo", "cashback_pct",
+            "cashback_eur", "net_total", "verified", "note"]
+ROW_KEYS = ("date", "platform", "seller", "variant", "url", "price",
+            "shipping", "threshold", "promo", "cashback_pct",
+            "cashback_eur", "net_total", "verified", "note")
+
+
+def normalize_rows(raw_rows):
+    """把 csv.reader 的輸出（含表頭列）正規化為 build 用的列 dict。
+
+    兩種版式：
     標準：group,date,platform,seller,variant,url,price,shipping,threshold,
           promo,cashback_pct,cashback_eur,net_total,verified,note
     舊版（2026-11-10 列，無 group／url）：
           platform,seller,date,variant,price,shipping,threshold,promo,
           cashback_pct,cashback_eur,net_total,verified,note
     """
-    path = src_dir / slug / "prices.csv"
+    if not raw_rows:
+        return []
+    header = raw_rows[0]
     rows = []
-    with path.open(encoding="utf-8-sig", newline="") as fh:
-        reader = csv.reader(fh)
-        header = next(reader)
-        for raw in reader:
-            if not raw or all(not c.strip() for c in raw):
-                continue
-            if len(raw) >= 3 and is_date(raw[2]) and not is_date(raw[1]):
-                keys = ["platform", "seller", "date", "variant", "price",
-                        "shipping", "threshold", "promo", "cashback_pct",
-                        "cashback_eur", "net_total", "verified", "note"]
-                row = dict(zip(keys, raw))
-                row.setdefault("url", "")
-                row.setdefault("group", "")
-            else:
-                row = dict(zip(header, raw))
-            rows.append({k: (row.get(k) or "").strip() for k in (
-                "date", "platform", "seller", "variant", "url", "price",
-                "shipping", "threshold", "promo", "cashback_pct",
-                "cashback_eur", "net_total", "verified", "note")})
+    for raw in raw_rows[1:]:
+        if not raw or all(not c.strip() for c in raw):
+            continue
+        if len(raw) >= 3 and is_date(raw[2]) and not is_date(raw[1]):
+            row = dict(zip(OLD_KEYS, raw))
+            row.setdefault("url", "")
+            row.setdefault("group", "")
+        else:
+            row = dict(zip(header, raw))
+        rows.append({k: (row.get(k) or "").strip() for k in ROW_KEYS})
     return rows
+
+
+def read_rows(slug, src_dir):
+    """讀本機 prices.csv 並正規化欄位（版式說明見 normalize_rows）。"""
+    path = src_dir / slug / "prices.csv"
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        return normalize_rows(list(csv.reader(fh)))
+
+
+# ── Google Sheet 來源（--source sheet）────────────────────────────────────
+class SheetError(RuntimeError):
+    """Sheet 抓取或驗證失敗：呼叫端應以非零碼結束，不覆寫任何輸出。"""
+
+
+def fetch_sheet_tab(sheet_id, tab):
+    url = ("https://docs.google.com/spreadsheets/d/" + sheet_id +
+           "/gviz/tq?tqx=out:csv&sheet=" + urllib.parse.quote(tab))
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (price-tracker build)"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode("utf-8-sig")
+    except urllib.error.HTTPError as e:
+        raise SheetError(
+            f"抓取分頁「{tab}」失敗：HTTP {e.code}。"
+            "若為 401/403，表示試算表尚未開放「知道連結的使用者可檢視」，"
+            "請先在 Google Sheets 介面設定分享後再重跑。")
+    except urllib.error.URLError as e:
+        raise SheetError(f"抓取分頁「{tab}」失敗：{e}")
+    if body.lstrip()[:200].lower().startswith(("<!doctype", "<html")):
+        raise SheetError(
+            f"抓取分頁「{tab}」回傳的不是 CSV（疑似登入頁）："
+            "試算表尚未開放「知道連結的使用者可檢視」，請先在 Google Sheets 介面設定分享。")
+    return body
+
+
+def validate_sheet_rows(slug, raw_rows, local_count):
+    """Sheet 模式的資料驗證。任何一項不過就 raise SheetError。
+
+    - 表頭前 15 欄須與 EXPECTED_HEADER 完全一致（多出的尾欄須為空）。
+    - 資料列數（非空列）不得少於本機 CSV（本機檔存在時）。
+    - 每列 date 須為合法 ISO 日期。
+    - price 非空時須可解析為數字；net_total 非空時須可解析為數字，
+      或為歷史欄位錯位的 verified 字串（yes/no 開頭，既有資料共 20 列，
+      本機模式亦同樣被 num() 判為無報價，屬已知遺留、只警告不擋）。
+    """
+    if not raw_rows:
+        raise SheetError(f"{slug}：分頁是空的")
+    header = [c.strip() for c in raw_rows[0]]
+    if header[:15] != EXPECTED_HEADER or any(c for c in header[15:]):
+        raise SheetError(f"{slug}：表頭不符。預期 {EXPECTED_HEADER}，實際 {header}")
+    data = [r for r in raw_rows[1:] if r and any(c.strip() for c in r)]
+    if local_count is not None and len(data) < local_count:
+        raise SheetError(f"{slug}：Sheet 列數 {len(data)} 少於本機 CSV {local_count} 列")
+    rows = normalize_rows(raw_rows)
+    legacy = 0
+    for i, row in enumerate(rows, 1):
+        v = row["date"]
+        if not is_date(v):
+            raise SheetError(f"{slug}：第 {i} 列 date 不是 ISO 日期：{v!r}")
+        try:
+            dt.date.fromisoformat(v)
+        except ValueError:
+            raise SheetError(f"{slug}：第 {i} 列 date 無法解析：{v!r}")
+        if row["price"] and num(row["price"]) is None:
+            raise SheetError(f"{slug}：第 {i} 列 price 無法解析為數字：{row['price']!r}")
+        nt = row["net_total"]
+        if nt and num(nt) is None:
+            if re.match(r"^(yes|no)(\(|$)", nt):
+                legacy += 1
+            else:
+                raise SheetError(f"{slug}：第 {i} 列 net_total 無法解析為數字：{nt!r}")
+    if legacy:
+        print(f"警告：{slug} 有 {legacy} 列 net_total 為歷史錯位的 verified 字串"
+              f"（與本機資料一致，照舊判為無報價）", file=sys.stderr)
+    return rows
+
+
+def read_rows_sheet(slug, sheet_id, src_dir):
+    body = fetch_sheet_tab(sheet_id, slug)
+    raw_rows = list(csv.reader(io.StringIO(body)))
+    local_count = None
+    local_path = src_dir / slug / "prices.csv"
+    if local_path.exists():
+        with local_path.open(encoding="utf-8-sig", newline="") as fh:
+            local_count = sum(1 for r in csv.reader(fh)
+                                if r and any(c.strip() for c in r)) - 1
+    return validate_sheet_rows(slug, raw_rows, local_count)
+
+
+def read_platforms_sheet(sheet_id):
+    """從 platforms 分頁重建 build 需要的 platforms 資料：
+    {slug: {"unverified": [{site, reason}], "product": <(meta) 列的 product>}}。
+    build 只用到 unverified 與 product（且 product 僅為 config 缺名時的備援）。"""
+    body = fetch_sheet_tab(sheet_id, "platforms")
+    raw_rows = list(csv.reader(io.StringIO(body)))
+    if not raw_rows or [c.strip() for c in raw_rows[0]] != \
+            ["product", "platform", "seller", "url", "status", "note"]:
+        raise SheetError("platforms：表頭不符，預期 product,platform,seller,url,status,note")
+    out = {}
+    for raw in raw_rows[1:]:
+        if not raw or all(not c.strip() for c in raw):
+            continue
+        slug, platform, _seller, _url, status, note = \
+            [(c or "").strip() for c in (list(raw) + [""] * 6)[:6]]
+        entry = out.setdefault(slug, {"unverified": [], "product": ""})
+        if status == "unverified":
+            entry["unverified"].append({"site": platform, "reason": note})
+        elif platform == "(meta)":
+            try:
+                entry["product"] = json.loads(note).get("product", "") or entry["product"]
+            except (ValueError, AttributeError):
+                pass
+    return out
 
 
 def read_platforms(slug, src_dir):
@@ -258,10 +388,16 @@ def fmt_date_zh(d):
     return f"{d.year}年{d.month}月{d.day}日"
 
 
-def build():
+def build(source="local"):
     cfg = json.loads((ROOT / "site.config.json").read_text(encoding="utf-8"))
     src_dir = Path(cfg.get("source_dir") or ROOT.parent / "price-tracker-handoff")
     aliases = cfg.get("cashback_portal_aliases") or {}
+    sheet_id = cfg.get("sheet_id")
+    if source == "sheet" and not sheet_id:
+        raise SheetError("site.config.json 未設定 sheet_id，無法使用 --source sheet")
+    # Sheet 模式：先一次抓完 platforms 分頁（抓取/驗證失敗在此即中止，
+    # 後續任何輸出都還沒寫入，符合「失敗不覆寫」的約定）
+    sheet_platforms = read_platforms_sheet(sheet_id) if source == "sheet" else {}
 
     # 商品清單：設定檔順序優先，handoff 有而設定沒寫的自動附加
     # （exclude_products 與 *-archived 資料夾除外，例如已停追的 newtral-chair）
@@ -279,8 +415,12 @@ def build():
     latest_all = ""
     for pid in pids:
         meta = (cfg.get("products") or {}).get(pid, {})
-        rows = read_rows(pid, src_dir)
-        pdata = read_platforms(pid, src_dir)
+        if source == "sheet":
+            rows = read_rows_sheet(pid, sheet_id, src_dir)
+            pdata = sheet_platforms.get(pid, {})
+        else:
+            rows = read_rows(pid, src_dir)
+            pdata = read_platforms(pid, src_dir)
         total_rows += len(rows)
         blocked = meta.get("blocked_platforms") or {}
         views = [offer_view(r, blocked, aliases) for r in rows]
@@ -433,4 +573,15 @@ def build():
 
 
 if __name__ == "__main__":
-    build()
+    source = "local"
+    if "--source" in sys.argv:
+        i = sys.argv.index("--source")
+        if i + 1 >= len(sys.argv) or sys.argv[i + 1] not in ("local", "sheet"):
+            print("用法：python3 build.py [--source local|sheet]", file=sys.stderr)
+            sys.exit(2)
+        source = sys.argv[i + 1]
+    try:
+        build(source=source)
+    except SheetError as e:
+        print(f"Sheet 模式中止（未覆寫任何輸出）：{e}", file=sys.stderr)
+        sys.exit(1)
