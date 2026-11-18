@@ -210,7 +210,7 @@
     var L=p.level; if(!L) return "";
     if(L.status!=="ok") return '<div class="level collecting"><span class="lv-h">價格水準</span>資料累積中（已有 '+L.n+' 天，需 '+L.need+' 天）</div>';
     function seg(v,a,b){return b>a?Math.min(1,Math.max(0,(v-a)/(b-a))):0.5;}
-    var c=L.cur, pos = c<=L.p25 ? seg(c,L.min,L.p25)/3 : (c>=L.p75 ? (2+seg(c,L.p75,L.max))/3 : (1+seg(c,L.p25,L.p75))/3);
+    var c=L.cur, pos = L.level==="low" ? seg(c,L.min,L.p25)/3 : (L.level==="high" ? (2+seg(c,L.p75,L.max))/3 : (1+seg(c,L.p25,L.p75))/3);
     pos=Math.min(0.97,Math.max(0.03,pos));
     var lv={low:"偏低",typical:"一般",high:"偏高"}[L.level]||L.level;
     return '<div class="level lv-'+esc(L.level)+'"><div class="lv-top"><span class="lv-h">目前價格</span><b class="lv-tag">'+esc(lv)+'</b><span class="lv-n">近 '+L.n+' 天</span></div>'+
