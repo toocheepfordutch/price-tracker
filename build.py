@@ -127,7 +127,7 @@ class SheetError(RuntimeError):
 
 def fetch_sheet_tab(sheet_id, tab):
     url = ("https://docs.google.com/spreadsheets/d/" + sheet_id +
-           "/gviz/tq?tqx=out:csv&sheet=" + urllib.parse.quote(tab))
+           "/gviz/tq?tqx=out:csv&headers=1&sheet=" + urllib.parse.quote(tab))
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (price-tracker build)"})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
