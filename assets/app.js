@@ -101,7 +101,7 @@
     html.push(cashbackHtml());
     html.push('</div></div>');
     $("#app").innerHTML = html.join("");
-    $("#foot").innerHTML = '<p><a href="privacy.html">Privacy</a> · <a href="affiliate-disclosure.html">Affiliate disclosure</a> · <a href="over-ons.html">Over ons / 聯絡</a></p><p>價格單位 EUR。未核實價格已標示，不可當現價；最佳價只計已核實、有貨可訂且可寄荷蘭的通路。只讀查價，不代下單。</p><p>產生時間：'+esc(D.generated_zh)+'（Europe/Amsterdam）・下次更新：'+esc(D.next_zh)+'</p>';
+    $("#foot").innerHTML = '<p>價格單位 EUR。未核實價格已標示，不可當現價；最佳價只計已核實、有貨可訂且可寄荷蘭的通路。只讀查價，不代下單。</p><p>產生時間：'+esc(D.generated_zh)+'（Europe/Amsterdam）・下次更新：'+esc(D.next_zh)+'</p>';
 
     var app=$("#app");
     app.querySelectorAll("[data-pick]").forEach(function(c){
