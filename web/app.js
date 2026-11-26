@@ -6,6 +6,17 @@
   function eur(v,d){ if(v==null||v==="") return "—"; return "€"+Number(v).toFixed(d==null?2:d); }
   function dayMonth(iso){ if(!iso) return ""; var p=iso.split("-"); return (+p[1])+"月"+(+p[2])+"日"; }
   function shortDate(iso){ if(!iso) return ""; var p=iso.split("-"); return (+p[1])+"/"+(+p[2]); }
+  // ── Amazon 導購標籤：render 時依站台補 tag（保留原有參數、既有 tag 會被換成正式值）；非 Amazon 連結原樣 ──
+  var AMAZON_TAGS = {"amazon.nl":"toocheepfor01-21","amazon.de":"toocheepfordu-21","amazon.com":"tcfd0b-20"};
+  function affUrl(u){
+    if(!u) return u;
+    try{
+      var a = new URL(u), tag = AMAZON_TAGS[a.hostname.toLowerCase().replace(/^www\./,"")];
+      if(!tag) return u;
+      a.searchParams.set("tag", tag);
+      return a.toString();
+    }catch(e){ return u; }
+  }
   var ARROW='<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13.2 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 1 1-1.4-1.4l4.3-4.3H4a1 1 0 1 1 0-2h13.5l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg>';
   var CHEV='<svg class="chev" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6.3 9.3a1 1 0 0 1 1.4 0L12 13.6l4.3-4.3a1 1 0 1 1 1.4 1.4l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 0 1 0-1.4z"/></svg>';
   var PLACEHOLDER="data:image/svg+xml,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='#e9f2f8'/><text x='50' y='64' font-size='38' text-anchor='middle'>🌀</text></svg>");
@@ -220,7 +231,7 @@
 
   function offerName(o){
     var n=esc(o.shop);
-    if(o.url) n='<a href="'+esc(o.url)+'" target="_blank" rel="noopener nofollow">'+n+'</a>';
+    if(o.url) n='<a href="'+esc(affUrl(o.url))+'" target="_blank" rel="noopener nofollow">'+n+'</a>';
     return n;
   }
 
@@ -238,7 +249,7 @@
       s += '<div class="where">目前沒有已核實、可買且可寄荷蘭的報價（最後查價 '+esc(dayMonth(p.date))+'）。</div></div>';
     } else {
       s += '<div class="deal"><div class="price"><div class="lbl">目前最低淨總價（已核實可買）</div><div class="val num">'+eur(b.net)+'</div><div class="per num">商品 '+eur(b.price)+'・'+esc(b.shipping_label||"")+'</div></div>';
-      s += '<a class="buy" href="'+esc(b.url||"#")+'" target="_blank" rel="noopener nofollow">前往 '+esc(b.shop)+' '+ARROW+'</a></div>';
+      s += '<a class="buy" href="'+esc(affUrl(b.url||"#"))+'" target="_blank" rel="noopener nofollow">前往 '+esc(b.shop)+' '+ARROW+'</a></div>';
       s += '<div class="where"><b>'+esc(b.shop)+'</b>'+(b.seller?'・'+esc(b.seller):'')+'・'+esc(b.variant)+' <span class="num">'+eur(b.net)+'</span><div class="c">'+tagsHtml(b)+'</div></div>';
       s += levelHtml(p);
       s += '</div>';
@@ -259,7 +270,7 @@
         '<div class="c">'+tagsHtml(o)+'</div>'+
         (o.note?'<div class="v">'+esc(o.note)+'</div>':'')+'</div>'+
         '<div class="o-price"><div class="u num">'+eur(o.net)+'</div><div class="h num">商品 '+eur(o.price)+'</div>'+
-        (o.url?'<a href="'+esc(o.url)+'" target="_blank" rel="noopener nofollow">前往 ›</a>':'')+'</div></li>';
+        (o.url?'<a href="'+esc(affUrl(o.url))+'" target="_blank" rel="noopener nofollow">前往 ›</a>':'')+'</div></li>';
     });
     s += '</ol>';
     if(others>0){ var lbl="顯示其他 "+others+" 筆（缺貨／未核實／不寄荷蘭／舊紀錄）"; s += '<button class="more" type="button" data-label="'+esc(lbl)+'">'+esc(lbl)+'</button>'; }
@@ -272,7 +283,7 @@
     var s='<div class="tablewrap"><table class="full"><thead><tr><th>日期</th><th>平台</th><th>賣家</th><th>規格</th><th>價格</th><th>運費</th><th>淨總價</th><th>核實</th><th>備註</th></tr></thead><tbody>';
     p.rows.forEach(function(r){
       var plat=esc(r.shop);
-      if(r.url) plat='<a href="'+esc(r.url)+'" target="_blank" rel="noopener nofollow">'+plat+'</a>';
+      if(r.url) plat='<a href="'+esc(affUrl(r.url))+'" target="_blank" rel="noopener nofollow">'+plat+'</a>';
       s+='<tr'+(r.verified?'':' class="unverified"')+'><td class="date">'+esc(r.date)+'</td><td>'+plat+'</td><td>'+esc(r.seller||"—")+'</td><td>'+esc(r.variant)+'</td>'+
         '<td class="num">'+eur(r.price)+'</td><td>'+esc(r.shipping||"—")+'</td><td class="num">'+eur(r.net)+'</td>'+
         '<td><span class="vbadge '+(r.verified?'ok">已核實':'no">未核實')+'</span>'+(r.verified_text&&r.verified_text!=="yes"&&r.verified_text!=="no"?'<br>'+esc(r.verified_text):'')+'</td>'+
